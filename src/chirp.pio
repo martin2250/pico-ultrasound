@@ -1,0 +1,56 @@
+.pio_version 0 // only requires PIO version 0
+
+.program chirp
+
+start:
+    set pins, 0b00     ; set pins to zero -> no output
+    pull               ; wait for first sample
+    set pins, 0b10     ; set one pin high
+loop:
+    set x, 0           ; set x to zero in case fifo is empty
+    pull noblock       ; pull one value from fifo, else copy x to osr
+    out x, 16          ; store back in x, use OUT to get around DMA lane replication
+    jmp !x start       ; check x zero -> fifo empty
+    set y, 15          ; 16x oversampling
+
+inner_loop:
+
+    mov x, osr         ; reload x
+delay:
+    jmp x-- delay      ; delay for x cycles
+
+    irq set 0          ; send ADC trigger
+    mov pins, !pins    ; toggle pins
+
+    mov x, osr         ; reload x
+delay_2:
+    jmp x-- delay_2    ; delay for x cycles
+
+    irq set 0          ; send ADC trigger
+
+    jmp y-- inner_loop_delay ; count down oversampling
+    jmp loop           ;
+
+inner_loop_delay:
+    jmp inner_loop [5] ; extra delay to take the same time as going through loop
+
+
+% c-sdk {
+static inline void chirp_program_init(PIO pio, uint sm, uint offset, uint pin_base) {
+    pio_gpio_init(pio, pin_base);
+    pio_gpio_init(pio, pin_base + 1);
+    // set both pins to output
+    pio_sm_set_consecutive_pindirs(pio, sm, pin_base, 2, true);
+
+    pio_sm_config c = chirp_program_get_default_config(offset);
+    sm_config_set_clkdiv(&c, 1.0);
+    // set in pins for MOV source
+    sm_config_set_in_pins(&c, pin_base);
+    sm_config_set_out_pins(&c, pin_base, 2);
+    sm_config_set_set_pins(&c, pin_base, 2);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+
+    pio_sm_init(pio, sm, offset, &c);
+    pio_sm_set_enabled(pio, sm, true);
+}
+%}
